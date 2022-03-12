@@ -22,4 +22,10 @@ def get_arg_parser():
     dp_group.add_argument('--delta', type=float, default=1e-5)
     dp_group.add_argument('--epsilon', type=float, default=10)
 
+    prune_group = parser.add_argument_group("prune")
+    prune_group.add_argument('--num_train_per_prune', type=int, default=10)
+    prune_group.add_argument('--prune_type', choices=["grouped", "local"], default="grouped")
+    prune_group.add_argument('--conv2d_prune_amount', type=float, default=0.4)
+    prune_group.add_argument('--linear_prune_amount', type=float, default=0.2)
+
     return parser
