@@ -1,3 +1,6 @@
+import time
+import random
+import json
 import torch
 import torchvision
 import torchvision.transforms as transforms
@@ -13,10 +16,10 @@ from model.fixup_resnet import ResNet9
 from prune.prune import L1Unstructured
 from haiku._src.data_structures import FlatMap
 
-# import os
-# os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-# os.environ["CUDA_VISIBLE_DEVICES"]="0"
-# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = 'false'
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="0"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = 'false'
 
 
 def net_fn(x, is_training=True):
@@ -96,6 +99,21 @@ if __name__ == '__main__':
     argParser = get_arg_parser()
     args = argParser.parse_args()
 
+    # Write config and log
+    if not args.debug:
+        timestamp = time.strftime('%b-%d-%Y-%H%M', time.localtime())
+        folder_name = "{}-{}".format(timestamp, random.randint(0, 1000))
+        print('* Results writing to: {}'.format(folder_name))
+        result_path = os.path.join(args.result_path, folder_name)
+        if not os.path.exists(result_path):
+            os.makedirs(result_path)
+        argparse_dict = vars(args)
+        with open(os.path.join(result_path, "arguments.json"), "w") as f:
+            json.dump(argparse_dict, f)
+        train_log = os.path.join(result_path, 'train_log.txt')
+        test_log = os.path.join(result_path, 'test_log.txt')
+
+    # Load data
     CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
     CIFAR10_STD_DEV = (0.2023, 0.1994, 0.2010)
 
@@ -140,6 +158,31 @@ if __name__ == '__main__':
     Test_epsilon = []
 
     for e in range(args.epochs):
+
+        if args.prune and (e > args.prune_after_n):
+            # Pruning
+            pruned_params = []
+            sparcities = []
+            prune_method = L1Unstructured(amount=args.conv2d_prune_amount)
+            for module_name in list(params.keys()):
+                tmp_name = module_name.split('/')[-1]
+                if 'conv' in tmp_name:
+                    tmp_param = params[module_name]['w']
+                    prune_mask, sparcity = prune_method.compute_mask(t=tmp_param, default_mask=False)
+                    apply_prune = prune_method.apply_mask(tmp_param, prune_mask)
+                    pruned_param = FlatMap(dict(w=apply_prune))
+                elif ('b' in tmp_name) or ('scale' in tmp_name) or ('logits' in tmp_name):
+                    pruned_param = params[module_name]
+                    sparcity = 0
+                else:
+                    raise NotImplementedError
+                pruned_params.append(pruned_param)
+                sparcities.append(sparcity)
+            params = update_prune(params, pruned_params)
+            avg_sparcity = np.mean(np.array(sparcities))
+        else:
+            avg_sparcity = -1
+
         gradients = None
         correct_preds = 0
         total_preds = 0
@@ -185,30 +228,22 @@ if __name__ == '__main__':
                                         sample_rate=args.lot_size / N_train)
                 eps = privacy_accountant.get_epsilon(delta=args.delta)
 
-                if args.prune:
-                    # Pruning
-                    pruned_params = []
-                    prune_method = L1Unstructured(amount=args.conv2d_prune_amount)
-                    for module_name in list(params.keys()):
-                        tmp_name = module_name.split('/')[-1]
-                        if 'conv' in tmp_name:
-                            tmp_param = params[module_name]['w']
-                            prune_mask = prune_method.compute_mask(t=tmp_param, default_mask=False)
-                            apply_prune = prune_method.apply_mask(tmp_param, prune_mask)
-                            pruned_param = FlatMap(dict(w=apply_prune))
-                        elif ('b' in tmp_name) or ('scale' in tmp_name) or ('logits' in tmp_name):
-                            pruned_param = params[module_name]
-                        else:
-                            raise NotImplementedError
-                        pruned_params.append(pruned_param)
-                    params = update_prune(params, pruned_params)
-
                 # Logging
                 print('Epoch: {}, Batch: {}, Acc = {:.3f}, Eps = {:.3f}'.format(
                     e, i, correct_preds / total_preds, eps
                 ))
                 Accuracy.append(correct_preds / total_preds)
                 Epsilon.append(eps)
+                if not args.debug:
+                    log_items = [
+                        e, i, correct_preds / total_preds, eps, avg_sparcity  # TODO: add grad size
+                    ]
+                    log_str = '{:.3f}_' * (len(log_items) - 1) + '{:.3f}'
+                    formatted_log = log_str.format(*log_items)
+                    with open(train_log, 'a+') as f:
+                        f.write(formatted_log)
+                        f.write('\n')
+
                 # Reset
                 gradients = None
                 correct_preds = 0
@@ -233,3 +268,13 @@ if __name__ == '__main__':
         ))
         Test_accuracy.append(correct_preds / total_preds)
         Test_epsilon.append(eps)
+
+        if not args.debug:
+            log_items = [
+                e, correct_preds / total_preds, eps
+            ]
+            log_str = '{:.3f}_' * (len(log_items) - 1) + '{:.3f}'
+            formatted_log = log_str.format(*log_items)
+            with open(test_log, 'a+') as f:
+                f.write(formatted_log)
+                f.write('\n')

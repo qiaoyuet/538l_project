@@ -24,6 +24,7 @@ def get_arg_parser():
 
     prune_group = parser.add_argument_group("prune")
     prune_group.add_argument('--prune', action='store_true')
+    prune_group.add_argument('--prune_after_n', type=int, default=10)
     prune_group.add_argument('--num_train_per_prune', type=int, default=10)
     prune_group.add_argument('--prune_type', choices=["grouped", "local"], default="grouped")
     prune_group.add_argument('--conv2d_prune_amount', type=float, default=0.4)

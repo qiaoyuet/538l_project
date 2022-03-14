@@ -41,10 +41,11 @@ class L1Unstructured(BasePrune):
                 tmp_t = np.array(t).flatten()
                 ind = np.argpartition(tmp_t, nparams_toprune)[:nparams_toprune]  # jnp function not yet implemented
                 mask_flat[ind] = 0
+                sparcity = np.count_nonzero(mask_flat==0)/len(mask_flat)
             mask = mask_flat.reshape(tensor_size)
             mask = jnp.array(mask)
 
-        return mask
+        return mask, sparcity
 
     def apply_mask(self, t, mask):
         return jax.tree_multimap(lambda p, u: jnp.asarray(p * u).astype(jnp.asarray(p).dtype), t, mask)
