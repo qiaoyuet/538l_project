@@ -8,15 +8,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from opacus.accountants.rdp import RDPAccountant
-import matplotlib.pyplot as plt
-import pandas as pd
 from arguments import get_arg_parser
 from model.fixup_resnet import ResNet9
+from prune.prune import L1Unstructured
+from haiku._src.data_structures import FlatMap
 
-import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = 'false'
+# import os
+# os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+# os.environ["CUDA_VISIBLE_DEVICES"]="0"
+# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = 'false'
 
 
 def net_fn(x, is_training=True):
@@ -82,6 +82,14 @@ def noise_grads(grads, max_clipping_value, noise_multiplier, lot_size):
     ]
     grads = [g / lot_size for g in grads]
     return jax.tree_unflatten(grads_treedef, grads)
+
+
+@jax.jit
+def update_prune(params, pruned_params):
+    tmp_keys = list(params.keys())
+    assert len(tmp_keys) == len(pruned_params), "Lens differ."
+    new_params = FlatMap(dict(zip(tmp_keys, pruned_params)))
+    return new_params
 
 
 if __name__ == '__main__':
@@ -176,6 +184,25 @@ if __name__ == '__main__':
                 privacy_accountant.step(noise_multiplier=args.noise_multiplier,
                                         sample_rate=args.lot_size / N_train)
                 eps = privacy_accountant.get_epsilon(delta=args.delta)
+
+                if args.prune:
+                    # Pruning
+                    pruned_params = []
+                    prune_method = L1Unstructured(amount=args.conv2d_prune_amount)
+                    for module_name in list(params.keys()):
+                        tmp_name = module_name.split('/')[-1]
+                        if 'conv' in tmp_name:
+                            tmp_param = params[module_name]['w']
+                            prune_mask = prune_method.compute_mask(t=tmp_param, default_mask=False)
+                            apply_prune = prune_method.apply_mask(tmp_param, prune_mask)
+                            pruned_param = FlatMap(dict(w=apply_prune))
+                        elif ('b' in tmp_name) or ('scale' in tmp_name) or ('logits' in tmp_name):
+                            pruned_param = params[module_name]
+                        else:
+                            raise NotImplementedError
+                        pruned_params.append(pruned_param)
+                    params = update_prune(params, pruned_params)
+
                 # Logging
                 print('Epoch: {}, Batch: {}, Acc = {:.3f}, Eps = {:.3f}'.format(
                     e, i, correct_preds / total_preds, eps
