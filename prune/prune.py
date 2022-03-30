@@ -39,7 +39,7 @@ class L1Unstructured(BasePrune):
             mask_flat = np.ones(tensor_size).flatten()
             if nparams_toprune != 0:
                 tmp_t = np.array(t).flatten()
-                ind = np.argpartition(tmp_t, nparams_toprune)[:nparams_toprune]  # jnp function not yet implemented
+                ind = np.argpartition(np.abs(tmp_t), nparams_toprune)[:nparams_toprune]  # jnp function not yet implemented
                 mask_flat[ind] = 0
                 sparcity = np.count_nonzero(mask_flat==0)/len(mask_flat)
             mask = mask_flat.reshape(tensor_size)

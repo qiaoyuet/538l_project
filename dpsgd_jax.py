@@ -89,13 +89,6 @@ def noise_grads(grads, max_clipping_value, noise_multiplier, lot_size, seed):
         # noise_z.append(z)
     noise_grads = jax.tree_unflatten(grads_treedef, noised)
     noise_grads = jax.tree_util.tree_map(lambda x: x / lot_size, noise_grads)
-    # grads = [
-    #     g + (max_clipping_value * noise_multiplier) * jax.random.normal(r, g.shape, g.dtype) \
-    #     for r, g in zip(rngs, grads_flat)
-    # ]
-    # # grads = [g / lot_size for g in grads]
-    # grads = jax.tree_unflatten(grads_treedef, grads)
-    # grads = jax.tree_map(lambda x: x / lot_size, grads)
     return noise_grads
 
 
@@ -171,7 +164,7 @@ if __name__ == '__main__':
 
     for e in range(args.epochs):
 
-        if args.prune and (e > args.prune_after_n):
+        if args.prune and (e > args.prune_after_n) and ((e - args.prune_after_n) // args.num_train_per_prune == 0):
             # Pruning
             pruned_params = []
             sparcities = []
