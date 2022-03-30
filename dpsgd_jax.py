@@ -15,10 +15,8 @@ from arguments import get_arg_parser
 from model.fixup_resnet import ResNet9
 from prune.prune import L1Unstructured
 from haiku._src.data_structures import FlatMap
-
 import os
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = 'false'
 
 
@@ -72,19 +70,33 @@ def clip_grads(grads, max_clipping_value):
         ),
         grads
     )
-    return grads
+    grads_norm_clipped = jnp.sqrt(jax.tree_util.tree_reduce(
+        lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+        grads, 0
+    ))
+    return grads, grads_norm, grads_norm_clipped
 
 
 @jax.jit
-def noise_grads(grads, max_clipping_value, noise_multiplier, lot_size):
+def noise_grads(grads, max_clipping_value, noise_multiplier, lot_size, seed):
     grads_flat, grads_treedef = jax.tree_flatten(grads)
-    (*rngs,) = jax.random.split(next(prng_seq), len(grads_flat))
-    grads = [
-        g + (max_clipping_value * noise_multiplier) * jax.random.normal(r, g.shape) \
-        for r, g in zip(rngs, grads_flat)
-    ]
-    grads = [g / lot_size for g in grads]
-    return jax.tree_unflatten(grads_treedef, grads)
+    (*rngs,) = jax.random.split(seed, len(grads_flat))
+    noised = []
+    # noise_z = []
+    for g, r in zip(grads_flat, rngs):
+        z = jax.random.normal(r, g.shape, g.dtype)
+        noised.append(g + (max_clipping_value * noise_multiplier) * z)
+        # noise_z.append(z)
+    noise_grads = jax.tree_unflatten(grads_treedef, noised)
+    noise_grads = jax.tree_util.tree_map(lambda x: x / lot_size, noise_grads)
+    # grads = [
+    #     g + (max_clipping_value * noise_multiplier) * jax.random.normal(r, g.shape, g.dtype) \
+    #     for r, g in zip(rngs, grads_flat)
+    # ]
+    # # grads = [g / lot_size for g in grads]
+    # grads = jax.tree_unflatten(grads_treedef, grads)
+    # grads = jax.tree_map(lambda x: x / lot_size, grads)
+    return noise_grads
 
 
 @jax.jit
@@ -186,6 +198,8 @@ if __name__ == '__main__':
         gradients = None
         correct_preds = 0
         total_preds = 0
+        gradients_size = 0
+        gradients_size_clipped = 0
         for i, batch in enumerate(train_loader):
             # Processing data format for jax
             batch_x, batch_y = batch
@@ -203,7 +217,10 @@ if __name__ == '__main__':
             loss, grads = get_loss_grads(params, batch_x, batch_y)
 
             # Clip (& Accumulate) gradient
-            grads = clip_grads(grads, max_clipping_value=args.clip)
+            grads, grads_norm, grads_norm_clipped = clip_grads(grads, max_clipping_value=args.clip)
+            gradients_size += jnp.mean(grads_norm)
+            gradients_size_clipped += jnp.mean(grads_norm_clipped)
+
             if gradients is None:
                 grads = jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0), grads)
             else:
@@ -214,15 +231,18 @@ if __name__ == '__main__':
             gradients = grads
 
             if (i + 1) % (args.lot_size // args.batch_size) == 0:
+                mean_gradients_size = gradients_size / (args.lot_size // args.batch_size)
+                mean_gradients_size_clipped = gradients_size_clipped / (args.lot_size // args.batch_size)
                 # Add noise
-                grads = noise_grads(
-                    grads,
+                gradients = noise_grads(
+                    gradients,
                     max_clipping_value=args.clip,
                     noise_multiplier=args.noise_multiplier,
-                    lot_size=args.lot_size
+                    lot_size=args.lot_size,
+                    seed=next(prng_seq)
                 )
                 # Descent (update)
-                params, opt_state = update(params, grads, opt_state)
+                params, opt_state = update(params, gradients, opt_state)
                 # Privacy Accountant
                 privacy_accountant.step(noise_multiplier=args.noise_multiplier,
                                         sample_rate=args.lot_size / N_train)
@@ -236,7 +256,8 @@ if __name__ == '__main__':
                 Epsilon.append(eps)
                 if not args.debug:
                     log_items = [
-                        e, i, correct_preds / total_preds, eps, avg_sparcity  # TODO: add grad size
+                        e, i, correct_preds / total_preds, eps, avg_sparcity,
+                        mean_gradients_size, mean_gradients_size_clipped
                     ]
                     log_str = '{:.3f}_' * (len(log_items) - 1) + '{:.3f}'
                     formatted_log = log_str.format(*log_items)
@@ -248,6 +269,8 @@ if __name__ == '__main__':
                 gradients = None
                 correct_preds = 0
                 total_preds = 0
+                gradients_size = 0
+                gradients_size_clipped = 0
 
         # evaluate test accuracy
         correct_preds = 0
