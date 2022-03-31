@@ -162,10 +162,13 @@ if __name__ == '__main__':
     Test_accuracy = []
     Test_epsilon = []
 
+    prune_masks = {}
+
     for e in range(args.epochs):
 
-        if args.prune and (e > args.prune_after_n) and ((e - args.prune_after_n) // args.num_train_per_prune == 0):
+        if args.prune and (e > args.prune_after_n - 1) and ((e - args.prune_after_n) % (args.num_train_per_prune + 1) == 0):
             # Pruning
+            print('Pruning step')
             pruned_params = []
             sparcities = []
             prune_method = L1Unstructured(amount=args.conv2d_prune_amount)
@@ -174,7 +177,12 @@ if __name__ == '__main__':
                 if 'conv' in tmp_name:
                     tmp_param = params[module_name]['w']
                     prune_mask, sparcity = prune_method.compute_mask(t=tmp_param, default_mask=False)
-                    apply_prune = prune_method.apply_mask(tmp_param, prune_mask)
+                    if module_name not in prune_masks:
+                        tmp_mask = prune_mask
+                    else:
+                        tmp_mask = jnp.multiply(prune_masks[module_name], prune_mask)
+                    prune_masks[module_name] = tmp_mask
+                    apply_prune = prune_method.apply_mask(tmp_param, prune_masks[module_name])
                     pruned_param = FlatMap(dict(w=apply_prune))
                 elif ('b' in tmp_name) or ('scale' in tmp_name) or ('logits' in tmp_name):
                     pruned_param = params[module_name]
@@ -186,6 +194,7 @@ if __name__ == '__main__':
             params = update_prune(params, pruned_params)
             avg_sparcity = np.mean(np.array(sparcities))
         else:
+            print('Regular training step')
             avg_sparcity = -1
 
         gradients = None
