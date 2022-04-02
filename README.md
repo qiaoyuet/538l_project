@@ -16,13 +16,13 @@ dpsgd and pruning are enabled by default in the pytorch version.
 
 To disable dpsgd run it like so:
 
-``` python
+``` bash
 python prune/mnist_dp_pytorch.py --no-dpsgd
 ```
 
 To disable pruning run it like so:
 
-``` python
+``` bash
 python prune/mnist_dp_pytorch.py --no-prune
 ```
 
