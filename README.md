@@ -10,3 +10,22 @@ With prune:
 ```python
 python dpsgd_jax.py --lot_size 32 --batch_size 8 --data_path /home/qiaoyuet/project/cifar10 --epochs 5 --prune
 ```
+
+#### Instructions for running pytorch version
+dpsgd and pruning are enabled by default in the pytorch version.
+
+To disable dpsgd run it like so:
+
+``` python
+python prune/mnist_dp_pytorch.py --no-dpsgd
+```
+
+To disable pruning run it like so:
+
+``` python
+python prune/mnist_dp_pytorch.py --no-prune
+```
+
+`
+
+`
