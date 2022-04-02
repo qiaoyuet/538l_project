@@ -63,6 +63,11 @@ def clip_grads(grads, max_clipping_value):
         lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
         grads, 0
     ))
+
+    grads_norm_per_layer = jax.tree_map(lambda x: jnp.sqrt(jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1)), grads)
+    grads_min = jax.tree_map(lambda x: jnp.min(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1), grads)
+    grads_max = jax.tree_map(lambda x: jnp.max(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1), grads)
+
     grads = jax.tree_util.tree_map(
         lambda x: x / jnp.maximum(
             1,
@@ -74,7 +79,13 @@ def clip_grads(grads, max_clipping_value):
         lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
         grads, 0
     ))
-    return grads, grads_norm, grads_norm_clipped
+
+    grads_norm_clipped_per_layer = jax.tree_map(lambda x: jnp.sqrt(jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1)), grads)
+    grads_clipped_min = jax.tree_map(lambda x: jnp.min(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1), grads)
+    grads_clipped_max = jax.tree_map(lambda x: jnp.max(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1), grads)
+
+    return grads, grads_norm, grads_norm_clipped, grads_norm_per_layer, grads_norm_clipped_per_layer, \
+            grads_min, grads_max, grads_clipped_min, grads_clipped_max
 
 
 @jax.jit
@@ -89,7 +100,14 @@ def noise_grads(grads, max_clipping_value, noise_multiplier, lot_size, seed):
         # noise_z.append(z)
     noise_grads = jax.tree_unflatten(grads_treedef, noised)
     noise_grads = jax.tree_util.tree_map(lambda x: x / lot_size, noise_grads)
-    return noise_grads
+    grads_norm_noised = jnp.sqrt(jax.tree_util.tree_reduce(
+        lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (1, -1)), axis=-1),
+        noise_grads, 0
+    ))
+    grads_norm_noised_per_layer = jax.tree_map(
+        lambda x: jnp.sqrt(jnp.sum(jnp.reshape(jnp.square(x), (1, -1)), axis=-1)), noise_grads)
+
+    return noise_grads, grads_norm_noised, grads_norm_noised_per_layer
 
 
 @jax.jit
@@ -98,6 +116,30 @@ def update_prune(params, pruned_params):
     assert len(tmp_keys) == len(pruned_params), "Lens differ."
     new_params = FlatMap(dict(zip(tmp_keys, pruned_params)))
     return new_params
+
+
+def get_per_layer_grad_norm(grad_norm_tree):
+    res_dict = {}
+    # res_names = []
+    # res_values = []
+    for layer_name in grad_norm_tree.keys():
+        # res_names.append(layer_name)
+        tmp_name = layer_name.split('/')[-1]
+        if 'b' in tmp_name:
+            tmp_value = float(grad_norm_tree[layer_name]['b'])
+        elif 'conv' in tmp_name:
+            tmp_value = float(grad_norm_tree[layer_name]['w'])
+        elif 'scale' in tmp_name:
+            tmp_value = float(grad_norm_tree[layer_name]['s'])
+        elif 'logits' in tmp_name:
+            tmp_value = (float(grad_norm_tree[layer_name]['b']),
+                         float(grad_norm_tree[layer_name]['w']))
+        else:
+            raise NotImplementedError('Unknown key.')
+        res_dict[layer_name] = tmp_value
+        # res_values.append(tmp_value)
+    return res_dict
+    # return res_names, res_values
 
 
 if __name__ == '__main__':
@@ -163,12 +205,16 @@ if __name__ == '__main__':
     Test_epsilon = []
 
     prune_masks = {}
+    prune_iter_counter = 0
 
     for e in range(args.epochs):
 
         if args.prune and (e > args.prune_after_n - 1) and ((e - args.prune_after_n) % (args.num_train_per_prune + 1) == 0):
             # Pruning
             print('Pruning step')
+            prune_iter_counter += 1
+            if prune_iter_counter % args.restore_every_n == 0:
+                prune_masks = {}
             pruned_params = []
             sparcities = []
             prune_method = L1Unstructured(amount=args.conv2d_prune_amount)
@@ -181,6 +227,9 @@ if __name__ == '__main__':
                         tmp_mask = prune_mask
                     else:
                         tmp_mask = jnp.multiply(prune_masks[module_name], prune_mask)
+                    tmp_mask_flat = np.array(tmp_mask).flatten()
+                    cur_sparcity = np.count_nonzero(tmp_mask_flat == 0) / len(tmp_mask_flat)
+                    sparcities.append(cur_sparcity)
                     prune_masks[module_name] = tmp_mask
                     apply_prune = prune_method.apply_mask(tmp_param, prune_masks[module_name])
                     pruned_param = FlatMap(dict(w=apply_prune))
@@ -190,7 +239,6 @@ if __name__ == '__main__':
                 else:
                     raise NotImplementedError
                 pruned_params.append(pruned_param)
-                sparcities.append(sparcity)
             params = update_prune(params, pruned_params)
             avg_sparcity = np.mean(np.array(sparcities))
         else:
@@ -202,6 +250,8 @@ if __name__ == '__main__':
         total_preds = 0
         gradients_size = 0
         gradients_size_clipped = 0
+        grads_norm_per_layer_sum = None
+        grads_norm_clipped_per_layer_sum = None
         for i, batch in enumerate(train_loader):
             # Processing data format for jax
             batch_x, batch_y = batch
@@ -219,7 +269,34 @@ if __name__ == '__main__':
             loss, grads = get_loss_grads(params, batch_x, batch_y)
 
             # Clip (& Accumulate) gradient
-            grads, grads_norm, grads_norm_clipped = clip_grads(grads, max_clipping_value=args.clip)
+            grads, grads_norm, grads_norm_clipped, grads_norm_per_layer, grads_norm_clipped_per_layer, \
+                grads_min, grads_max, grads_clipped_min, grads_clipped_max = \
+                clip_grads(grads, max_clipping_value=args.clip)
+            grads_norm_per_layer = jax.tree_map(lambda x: jnp.mean(x, axis=0), grads_norm_per_layer)
+            grads_norm_clipped_per_layer = jax.tree_map(lambda x: jnp.mean(x, axis=0), grads_norm_clipped_per_layer)
+            grads_min = jax.tree_map(lambda x: jnp.mean(x, axis=0), grads_min)
+            grads_max = jax.tree_map(lambda x: jnp.mean(x, axis=0), grads_max)
+            grads_clipped_min = jax.tree_map(lambda x: jnp.mean(x, axis=0), grads_clipped_min)
+            grads_clipped_max = jax.tree_map(lambda x: jnp.mean(x, axis=0), grads_clipped_max)
+            grads_min_dict = get_per_layer_grad_norm(grads_min)
+            grads_max_dict = get_per_layer_grad_norm(grads_max)
+            grads_clipped_min_dict = get_per_layer_grad_norm(grads_clipped_min)
+            grads_clipped_max_dict = get_per_layer_grad_norm(grads_clipped_max)
+
+            print("Min; Max; ClipMin, ClipMax")
+            print(grads_min_dict.values())
+            print(grads_max_dict.values())
+            print(grads_clipped_min_dict.values())
+            print(grads_clipped_max_dict.values())
+
+            if grads_norm_per_layer_sum is None:
+                grads_norm_per_layer_sum = grads_norm_per_layer
+                grads_norm_clipped_per_layer_sum = grads_norm_clipped_per_layer
+            else:
+                grads_norm_per_layer_sum = jax.tree_multimap(
+                    lambda x, y: x+y, grads_norm_per_layer_sum, grads_norm_per_layer)
+                grads_norm_clipped_per_layer_sum = jax.tree_multimap(
+                    lambda x, y: x + y, grads_norm_clipped_per_layer_sum, grads_norm_clipped_per_layer)
             gradients_size += jnp.mean(grads_norm)
             gradients_size_clipped += jnp.mean(grads_norm_clipped)
 
@@ -235,14 +312,22 @@ if __name__ == '__main__':
             if (i + 1) % (args.lot_size // args.batch_size) == 0:
                 mean_gradients_size = gradients_size / (args.lot_size // args.batch_size)
                 mean_gradients_size_clipped = gradients_size_clipped / (args.lot_size // args.batch_size)
+                grads_norm_per_layer_sum = jax.tree_map(
+                    lambda x: x / (args.lot_size // args.batch_size), grads_norm_per_layer_sum)
+                grads_norm_clipped_per_layer_sum = jax.tree_map(
+                    lambda x: x / (args.lot_size // args.batch_size), grads_norm_clipped_per_layer_sum)
+                grads_norm_per_layer_dict = get_per_layer_grad_norm(grads_norm_per_layer_sum)
+                grads_norm_clipped_per_layer_dict = get_per_layer_grad_norm(grads_norm_clipped_per_layer_sum)
+
                 # Add noise
-                gradients = noise_grads(
+                gradients, grads_norm_noised, grads_norm_noised_per_layer = noise_grads(
                     gradients,
                     max_clipping_value=args.clip,
                     noise_multiplier=args.noise_multiplier,
                     lot_size=args.lot_size,
                     seed=next(prng_seq)
                 )
+                grads_norm_noised_per_layer_dict = get_per_layer_grad_norm(grads_norm_noised_per_layer)
                 # Descent (update)
                 params, opt_state = update(params, gradients, opt_state)
                 # Privacy Accountant
@@ -258,11 +343,14 @@ if __name__ == '__main__':
                 Epsilon.append(eps)
                 if not args.debug:
                     log_items = [
-                        e, i, correct_preds / total_preds, eps, avg_sparcity,
-                        mean_gradients_size, mean_gradients_size_clipped
+                        e, i, float(correct_preds / total_preds), eps, avg_sparcity,
+                        float(mean_gradients_size), float(mean_gradients_size_clipped), float(grads_norm_noised),
                     ]
-                    log_str = '{:.3f}_' * (len(log_items) - 1) + '{:.3f}'
+                    log_str = '{:.3f} | ' * (len(log_items) - 1) + '{:.3f}'
                     formatted_log = log_str.format(*log_items)
+                    formatted_log = formatted_log + " | " + str(grads_norm_per_layer_dict) + \
+                                    " | " + str(grads_norm_clipped_per_layer_dict) + \
+                                    " | " + str(grads_norm_noised_per_layer_dict)
                     with open(train_log, 'a+') as f:
                         f.write(formatted_log)
                         f.write('\n')
@@ -273,6 +361,8 @@ if __name__ == '__main__':
                 total_preds = 0
                 gradients_size = 0
                 gradients_size_clipped = 0
+                grads_norm_per_layer_sum = None
+                grads_norm_clipped_per_layer_sum = None
 
         # evaluate test accuracy
         correct_preds = 0

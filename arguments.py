@@ -29,5 +29,6 @@ def get_arg_parser():
     prune_group.add_argument('--prune_type', choices=["grouped", "local"], default="grouped")
     prune_group.add_argument('--conv2d_prune_amount', type=float, default=0.4)
     prune_group.add_argument('--linear_prune_amount', type=float, default=0.2)
+    prune_group.add_argument('--restore_every_n', type=int, default=5)
 
     return parser

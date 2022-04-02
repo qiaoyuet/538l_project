@@ -24,7 +24,7 @@ def accuracy(preds, labels):
     return (preds == labels).mean()
 
 
-def train(model, train_loader, optimizer, epoch, device, privacy_engine):
+def train(model, train_loader, optimizer, epoch, device, privacy_engine, prune=False):
     model.train()
     criterion = nn.CrossEntropyLoss()
 
@@ -55,16 +55,74 @@ def train(model, train_loader, optimizer, epoch, device, privacy_engine):
             losses.append(loss.item())
             top1_acc.append(acc)
 
+            if prune:
+                l1_reg = torch.tensor(0.).to(device)
+                for module in model.modules():
+                    mask = None
+                    weight = None
+                    for name, buffer in module.named_buffers():
+                        if name == "weight_mask":
+                            mask = buffer
+                    for name, param in module.named_parameters():
+                        if name == "weight_orig":
+                            weight = param
+                    # We usually only want to introduce sparsity to weights and prune weights.
+                    # Do the same for bias if necessary.
+                    if mask is not None and weight is not None:
+                        l1_reg += torch.norm(mask * weight, 1)
+
+                l1_regularization_strength = 0
+                loss += l1_regularization_strength * l1_reg
+
             loss.backward()
+
+            # calculate grad norm
+            norm_sum_accumulator = 0
+            tmp_min_accumulator = []
+            tmp_max_accumulator = []
+            for param in model.parameters():
+                tmp_grad = param.grad
+                tmp_min = np.amin(np.square(param.cpu().detach().numpy()))
+                tmp_max = np.amax(np.square(param.cpu().detach().numpy()))
+                tmp_min_accumulator.append(tmp_min)
+                tmp_max_accumulator.append(tmp_max)
+                tmp_sum = np.sum(np.square(tmp_grad.cpu().detach().numpy()))
+                norm_sum_accumulator += tmp_sum
+            grad_norm = np.sqrt(norm_sum_accumulator)
+            grad_min = np.mean(tmp_min_accumulator)
+            grad_max = np.mean(tmp_max_accumulator)
+
             optimizer.step()
 
-            if (i + 1) % 200 == 0:
+            # calculate grad norm after clipping and noise (?)
+            post_norm_sum_accumulator = 0
+            post_tmp_min_accumulator = []
+            post_tmp_max_accumulator = []
+            for param in model.parameters():
+                tmp_grad = param.grad
+                tmp_min = np.amin(np.square(param.cpu().detach().numpy()))
+                tmp_max = np.amax(np.square(param.cpu().detach().numpy()))
+                post_tmp_min_accumulator.append(tmp_min)
+                post_tmp_max_accumulator.append(tmp_max)
+                tmp_sum = np.sum(np.square(tmp_grad.cpu().detach().numpy()))
+                post_norm_sum_accumulator += tmp_sum
+            post_grad_norm = np.sqrt(post_norm_sum_accumulator)
+            post_grad_min = np.mean(post_tmp_min_accumulator)
+            post_grad_max = np.mean(post_tmp_max_accumulator)
+
+            if (i + 1) % 50 == 0:
                 epsilon = privacy_engine.get_epsilon(args.delta)
                 print(
                     f"\tTrain Epoch: {epoch} \t"
                     f"Loss: {np.mean(losses):.6f} "
                     f"Acc@1: {np.mean(top1_acc) * 100:.6f} "
                     f"(ε = {epsilon:.2f}, δ = {args.delta})"
+                    f"Grad norm: {grad_norm:.3f} "
+                    f"Grad min: {grad_min:.3f} "
+                    f"Grad max: {grad_max:.3f} "
+                    f"Post Grad norm: {post_grad_norm:.3f} "
+                    f"Post Grad min: {post_grad_min:.3f} "
+                    f"Post rad max: {post_grad_max:.3f} "
                 )
 
 
@@ -126,7 +184,7 @@ def measure_global_sparsity(model,
 
 
 def train_with_prune(
-        model, train_loader, optimizer, epoch, device, privacy_engine,
+        model, train_loader, optimizer, device, privacy_engine, epoch,
         prune_type, conv2d_prune_amount, linear_prune_amount, num_train_per_prune
 ):
     # Pruning
@@ -159,7 +217,7 @@ def train_with_prune(
 
     # Train
     for inside_epoch in range(num_train_per_prune):
-        train(model, train_loader, optimizer, epoch, device, privacy_engine)
+        train(model, train_loader, optimizer, epoch, device, privacy_engine, prune=True)
 
     num_zeros, num_elements, sparsity = measure_global_sparsity(
         model,
@@ -240,22 +298,35 @@ def main(args):
 
     # Init privacy accountant
     privacy_engine = PrivacyEngine()
-    model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
+    # model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
+    #     module=model,
+    #     optimizer=optimizer,
+    #     data_loader=train_loader,
+    #     epochs=args.epochs,
+    #     target_epsilon=args.epsilon,
+    #     target_delta=args.delta,
+    #     max_grad_norm=args.clip,
+    # )
+    model, optimizer, data_loader = privacy_engine.make_private(
         module=model,
         optimizer=optimizer,
         data_loader=train_loader,
-        epochs=args.epochs,
-
-        target_epsilon=args.epsilon,
-        target_delta=args.delta,
+        noise_multiplier=args.noise_multiplier,
         max_grad_norm=args.clip,
     )
 
     # Training loop
-    for epoch in tqdm(range(args.epochs), desc="Epoch", unit="epoch"):
-        train(model, train_loader, optimizer, epoch + 1, device, privacy_engine)
-        if epoch % args.test_every_n == 0:
-            top1_acc = test(model, test_loader, device)
+    if args.prune:
+        train_with_prune(
+            model, train_loader, optimizer, device, privacy_engine, epoch=args.epochs,
+            prune_type=args.prune_type, conv2d_prune_amount=args.conv2d_prune_amount,
+            linear_prune_amount=args.linear_prune_amount, num_train_per_prune=args.num_train_per_prune
+        )
+    else:
+        for epoch in tqdm(range(args.epochs), desc="Epoch", unit="epoch"):
+            train(model, train_loader, optimizer, epoch + 1, device, privacy_engine)
+            if epoch % args.test_every_n == 0:
+                top1_acc = test(model, test_loader, device)
 
 
 if __name__ == "__main__":
