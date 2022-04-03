@@ -29,12 +29,15 @@ import pickle
 from multiprocessing.pool import ThreadPool
 from typing import Dict
 import argparse
-
+import GPy
+import GPyOpt
+from GPyOpt.methods import BayesianOptimization
 # # Dataset
 #
 # For this assignment, we will be using the popular `MNIST` dataset, which has `60000` training images and `x` testing images of digits ranging from 0-9. Each datapoing is a `28x28` greyscale image.
 #
 # We first load the training and testing dataset directly using PyTorch's `torchvision` library as follows:
+
 
 
 def get_model_artifacts():
@@ -65,6 +68,7 @@ def prune(model: torch.nn.Module, mag_thres=0.01):
 
 def train(model, criterion, trainset, valset, accountant, args: argparse.Namespace):
 
+    acc = 0
     for epoch in range(args.epochs):
         # Define accountant
         model.train()
@@ -154,8 +158,10 @@ def train(model, criterion, trainset, valset, accountant, args: argparse.Namespa
         epsilon = accountant.get_epsilon(delta=args.delta)
 
         val_acc = test(model, valset, args)
-        print(f"Epoch: {epoch}, Validation acc:{val_acc.mean():.2f}, epsilon: {epsilon}")
+        acc = val_acc.mean()
+        print(f"Epoch: {epoch}, Validation acc:{acc:.2f}, epsilon: {epsilon}")
 
+    return round(acc,2)
 
 # %% testing
 
@@ -191,7 +197,6 @@ def test(model, valset, args):
 
 # %% Main
 
-
 if __name__ == '__main__':
 
     transform = transforms.Compose([transforms.ToTensor(),
@@ -220,4 +225,29 @@ if __name__ == '__main__':
     params = parser.parse_args()
     accountant = RDPAccountant()
 
-    train(model, criterion, trainset, valset, accountant, params)
+    def factors(x):
+        factorList = []
+        for i in range(1, x + 1):
+            if x % i == 0:
+                factorList.append(i)
+
+        return factorList
+
+    #Objective Function
+    def f(bo_params):
+        params.max_grad_norm = round(bo_params['max_grad_norm'],2)
+        params.noise = round(bo_params['noise'], 2)
+        factorList = factors(int(len(trainset) / params.batch_size))
+        params.n_prune = factorList[int(bo_params['n-prune'])]
+        return - train(model, criterion, trainset, valset, accountant, params)
+
+    from hyperopt import hp
+    space = {}
+    space['max_grad_norm'] = hp.uniform('max_grad_norm', 0.5, 1.0)
+    space['noise'] = hp.uniform('noise', 0.5,3.5)
+    factorList = factors(int(len(trainset)/params.batch_size))
+    space['n-prune'] = hp.uniform('n-prune',10,len(factorList))
+    # minimize the objective over the space
+    from hyperopt import fmin, tpe
+
+    best = fmin(f, space, algo=tpe.suggest, max_evals=10)
