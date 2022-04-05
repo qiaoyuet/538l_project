@@ -62,7 +62,7 @@ def prune(model: torch.nn.Module, mag_thres=0.01):
     params = model.parameters()
     with torch.no_grad():
         for param in params:
-            temp = threshold(param)
+            temp = threshold(torch.abs(param))
             param.copy_(temp)
 # %% training code
 
@@ -148,10 +148,8 @@ def train(model, criterion, trainset, valset, accountant, args: argparse.Namespa
                 # Perform weight update
                 for param in model.parameters():
                     param.data.sub_(1e-1 * param.grad.data)
-
-
-        # Do one final step of pruning
-        prune(model, mag_thres=args.thresh)
+            # Do one final step of pruning
+            # prune(model, mag_thres=args.thresh)
 
         # Estimate epsilon after taking a gradient step.
         accountant.step(noise_multiplier=args.noise, sample_rate=args.sampler_rate)
@@ -209,7 +207,7 @@ if __name__ == '__main__':
 
     # Get training parameters
     parser = argparse.ArgumentParser()
-    parser.add_argument('-e', '--epochs', type=int, default=10)
+    parser.add_argument('-e', '--epochs', type=int, default=8)
     parser.add_argument('-b', '--batch_size', type=int, default=8)
     parser.add_argument('-m', '--max_grad_norm', type=float, default=1.0, help='')
     parser.add_argument('-d', '--delta', default=1e-5, type=float, help='Delta for DP-SGD')
@@ -233,21 +231,28 @@ if __name__ == '__main__':
 
         return factorList
 
+    train(model, criterion, trainset, valset, accountant, params)
+
     #Objective Function
     def f(bo_params):
-        params.max_grad_norm = round(bo_params['max_grad_norm'],2)
-        params.noise = round(bo_params['noise'], 2)
-        factorList = factors(int(len(trainset) / params.batch_size))
-        params.n_prune = factorList[int(bo_params['n-prune'])]
+        #params.max_grad_norm = round(bo_params['max_grad_norm'],2)
+        #params.noise = round(bo_params['noise'], 2)
+        #factorList = factors(int(len(trainset) / params.batch_size))
+        #params.n_prune = factorList[int(bo_params['n-prune'])]
+        #params.thresh = bo_params['thresh']
+        #print(f"n-prune = {params.n_prune}, max_grad_norm = {params.max_grad_norm}, noise = {params.noise}, thresh = {params.thresh}")
+        #print(f"max_grad_norm = {params.max_grad_norm}, noise = {params.noise}")
+        model, criterion = get_model_artifacts()
         return - train(model, criterion, trainset, valset, accountant, params)
 
     from hyperopt import hp
     space = {}
     space['max_grad_norm'] = hp.uniform('max_grad_norm', 0.5, 1.0)
     space['noise'] = hp.uniform('noise', 0.5,3.5)
-    factorList = factors(int(len(trainset)/params.batch_size))
-    space['n-prune'] = hp.uniform('n-prune',10,len(factorList))
+    #factorList = factors(int(len(trainset)/params.batch_size))
+    #space['n-prune'] = hp.uniform('n-prune',10,len(factorList))
+    #space['thresh'] = hp.uniform('thresh',0.001,0.1)
     # minimize the objective over the space
     from hyperopt import fmin, tpe
 
-    best = fmin(f, space, algo=tpe.suggest, max_evals=10)
+    best = fmin(f, space, algo=tpe.suggest, max_evals=200)
