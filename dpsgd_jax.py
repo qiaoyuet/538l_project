@@ -58,7 +58,12 @@ def get_loss_grads(params, x, y):
 
 
 @jax.jit
-def clip_grads(grads, max_clipping_value):
+def clip_grads(grads, max_clipping_value, prune_masks_tree):
+    if prune_masks_tree != []:
+        grads = jax.tree_multimap(
+            lambda x, y: x * jnp.repeat(jnp.expand_dims(y, axis=0), repeats=x.shape[0], axis=0),
+            grads, prune_masks_tree)
+
     grads_norm = jnp.sqrt(jax.tree_util.tree_reduce(
         lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
         grads, 0
@@ -89,7 +94,7 @@ def clip_grads(grads, max_clipping_value):
 
 
 @jax.jit
-def noise_grads(grads, max_clipping_value, noise_multiplier, lot_size, seed):
+def noise_grads(grads, max_clipping_value, noise_multiplier, lot_size, seed, prune_masks_tree):
     grads_flat, grads_treedef = jax.tree_flatten(grads)
     (*rngs,) = jax.random.split(seed, len(grads_flat))
     noised = []
@@ -100,6 +105,10 @@ def noise_grads(grads, max_clipping_value, noise_multiplier, lot_size, seed):
         # noise_z.append(z)
     noise_grads = jax.tree_unflatten(grads_treedef, noised)
     noise_grads = jax.tree_util.tree_map(lambda x: x / lot_size, noise_grads)
+
+    if prune_masks_tree != []:
+        noise_grads = jax.tree_multimap(lambda x, y: x * y, noise_grads, prune_masks_tree)
+
     grads_norm_noised = jnp.sqrt(jax.tree_util.tree_reduce(
         lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (1, -1)), axis=-1),
         noise_grads, 0
@@ -205,45 +214,78 @@ if __name__ == '__main__':
     Test_epsilon = []
 
     prune_masks = {}
+    prune_masks_tree = []
     prune_iter_counter = 0
+
+    clip = args.clip
+    mean_gradients_size_old = None
 
     for e in range(args.epochs):
 
         if args.prune and (e > args.prune_after_n - 1) and ((e - args.prune_after_n) % (args.num_train_per_prune + 1) == 0):
             # Pruning
             print('Pruning step')
+            prune_masks_tree = []
             prune_iter_counter += 1
             if prune_iter_counter % args.restore_every_n == 0:
                 prune_masks = {}
             pruned_params = []
             sparcities = []
+            prune_q_25_list, prune_q_50_list, prune_q_75_list, pruned_max_list = [], [], [], []
             prune_method = L1Unstructured(amount=args.conv2d_prune_amount)
             for module_name in list(params.keys()):
                 tmp_name = module_name.split('/')[-1]
                 if 'conv' in tmp_name:
                     tmp_param = params[module_name]['w']
-                    prune_mask, sparcity = prune_method.compute_mask(t=tmp_param, default_mask=False)
+                    if module_name not in prune_masks:
+                        default_mask = None
+                    else:
+                        default_mask = prune_masks[module_name]
+                    prune_mask, sparcity, prune_stats = prune_method.compute_mask(t=tmp_param, default_mask=default_mask)
+                    prune_q_25, prune_q_50, prune_q_75, pruned_max = prune_stats
+                    prune_q_25_list.append(prune_q_25)
+                    prune_q_50_list.append(prune_q_50)
+                    prune_q_75_list.append(prune_q_75)
+                    pruned_max_list.append(pruned_max)
                     if module_name not in prune_masks:
                         tmp_mask = prune_mask
                     else:
                         tmp_mask = jnp.multiply(prune_masks[module_name], prune_mask)
+                    tmp_prune_masks_tree = FlatMap(dict(w=tmp_mask))
                     tmp_mask_flat = np.array(tmp_mask).flatten()
                     cur_sparcity = np.count_nonzero(tmp_mask_flat == 0) / len(tmp_mask_flat)
                     sparcities.append(cur_sparcity)
                     prune_masks[module_name] = tmp_mask
                     apply_prune = prune_method.apply_mask(tmp_param, prune_masks[module_name])
                     pruned_param = FlatMap(dict(w=apply_prune))
-                elif ('b' in tmp_name) or ('scale' in tmp_name) or ('logits' in tmp_name):
+                elif 'b' in tmp_name:
                     pruned_param = params[module_name]
                     sparcity = 0
+                    tmp_prune_masks_tree = FlatMap(dict(b=jnp.ones_like(params[module_name]['b'])))
+                elif 'scale' in tmp_name:
+                    pruned_param = params[module_name]
+                    sparcity = 0
+                    tmp_prune_masks_tree = FlatMap(dict(s=jnp.ones_like(params[module_name]['s'])))
+                elif 'logits' in tmp_name:
+                    pruned_param = params[module_name]
+                    sparcity = 0
+                    tmp_prune_masks_tree = FlatMap(dict(w=jnp.ones_like(params[module_name]['w']),
+                                                        b=jnp.ones_like(params[module_name]['b'])))
                 else:
                     raise NotImplementedError
                 pruned_params.append(pruned_param)
+                prune_masks_tree.append(tmp_prune_masks_tree)
             params = update_prune(params, pruned_params)
+            prune_masks_tree = update_prune(params, prune_masks_tree)
             avg_sparcity = np.mean(np.array(sparcities))
+            avg_prune_q_25 = np.mean(np.array(prune_q_25_list))
+            avg_prune_q_50 = np.mean(np.array(prune_q_50_list))
+            avg_prune_q_75 = np.mean(np.array(prune_q_75_list))
+            avg_pruned_max = np.mean(np.array(pruned_max_list))
         else:
             print('Regular training step')
             avg_sparcity = -1
+            avg_prune_q_25, avg_prune_q_50, avg_prune_q_75, avg_pruned_max = -1, -1, -1, -1
 
         gradients = None
         correct_preds = 0
@@ -271,7 +313,7 @@ if __name__ == '__main__':
             # Clip (& Accumulate) gradient
             grads, grads_norm, grads_norm_clipped, grads_norm_per_layer, grads_norm_clipped_per_layer, \
                 grads_min, grads_max, grads_clipped_min, grads_clipped_max = \
-                clip_grads(grads, max_clipping_value=args.clip)
+                clip_grads(grads, max_clipping_value=clip, prune_masks_tree=prune_masks_tree)
             grads_norm_per_layer = jax.tree_map(lambda x: jnp.mean(x, axis=0), grads_norm_per_layer)
             grads_norm_clipped_per_layer = jax.tree_map(lambda x: jnp.mean(x, axis=0), grads_norm_clipped_per_layer)
             grads_min = jax.tree_map(lambda x: jnp.mean(x, axis=0), grads_min)
@@ -283,11 +325,11 @@ if __name__ == '__main__':
             grads_clipped_min_dict = get_per_layer_grad_norm(grads_clipped_min)
             grads_clipped_max_dict = get_per_layer_grad_norm(grads_clipped_max)
 
-            print("Min; Max; ClipMin, ClipMax")
-            print(grads_min_dict.values())
-            print(grads_max_dict.values())
-            print(grads_clipped_min_dict.values())
-            print(grads_clipped_max_dict.values())
+            # print("Min; Max; ClipMin, ClipMax")
+            # print(grads_min_dict.values())
+            # print(grads_max_dict.values())
+            # print(grads_clipped_min_dict.values())
+            # print(grads_clipped_max_dict.values())
 
             if grads_norm_per_layer_sum is None:
                 grads_norm_per_layer_sum = grads_norm_per_layer
@@ -322,10 +364,11 @@ if __name__ == '__main__':
                 # Add noise
                 gradients, grads_norm_noised, grads_norm_noised_per_layer = noise_grads(
                     gradients,
-                    max_clipping_value=args.clip,
+                    max_clipping_value=clip,
                     noise_multiplier=args.noise_multiplier,
                     lot_size=args.lot_size,
-                    seed=next(prng_seq)
+                    seed=next(prng_seq),
+                    prune_masks_tree=prune_masks_tree
                 )
                 grads_norm_noised_per_layer_dict = get_per_layer_grad_norm(grads_norm_noised_per_layer)
                 # Descent (update)
@@ -335,6 +378,10 @@ if __name__ == '__main__':
                                         sample_rate=args.lot_size / N_train)
                 eps = privacy_accountant.get_epsilon(delta=args.delta)
 
+                if args.rescale_c and mean_gradients_size_old is not None:
+                    clip *= mean_gradients_size / mean_gradients_size_old
+                mean_gradients_size_old = mean_gradients_size
+
                 # Logging
                 print('Epoch: {}, Batch: {}, Acc = {:.3f}, Eps = {:.3f}'.format(
                     e, i, correct_preds / total_preds, eps
@@ -343,8 +390,9 @@ if __name__ == '__main__':
                 Epsilon.append(eps)
                 if not args.debug:
                     log_items = [
-                        e, i, float(correct_preds / total_preds), eps, avg_sparcity,
+                        e, i, float(correct_preds / total_preds), eps, avg_sparcity, clip,
                         float(mean_gradients_size), float(mean_gradients_size_clipped), float(grads_norm_noised),
+                        avg_prune_q_25, avg_prune_q_50, avg_prune_q_75, avg_pruned_max
                     ]
                     log_str = '{:.3f} | ' * (len(log_items) - 1) + '{:.3f}'
                     formatted_log = log_str.format(*log_items)
