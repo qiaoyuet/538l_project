@@ -43,11 +43,11 @@ def net_fn(x, is_training=True):
 @jax.jit
 def loss_fn(params, x, y, is_training=True):
     logits = model.apply(params, x, is_training=is_training)
-    loss = optax.softmax_cross_entropy(logits, y)
-    return loss[0]
-    # labels = jax.nn.one_hot(y, 10)
-    # softmax_xent = -jnp.sum(labels * jax.nn.log_softmax(logits))
-    # return softmax_xent
+    # loss = optax.softmax_cross_entropy(logits, y)
+    # return loss[0]
+    labels = jax.nn.one_hot(y, 10)
+    softmax_xent = -jnp.sum(labels * jax.nn.log_softmax(logits))
+    return softmax_xent
 
 
 @jax.jit
@@ -278,11 +278,11 @@ if __name__ == '__main__':
                 params, opt_state = update(params, gradients, opt_state)
                 # params = update_prune(params, prune_masks_tree)
 
-                # TMP: noise_schedulers
-                if args.noise_scheduler == 'exp_decay':
-                    noise_multiplier *= 0.99
-                elif args.noise_scheduler == 'exp_increase':
-                    noise_multiplier *= 1.01
+                # # TMP: noise_schedulers
+                # if args.noise_scheduler == 'exp_decay':
+                #     noise_multiplier *= 0.99
+                # elif args.noise_scheduler == 'exp_increase':
+                #     noise_multiplier *= 1.01
 
                 # pruning
                 # FIXME: lot_idx_counter or e
