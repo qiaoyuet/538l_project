@@ -43,10 +43,11 @@ def net_fn(x, is_training=True):
 @jax.jit
 def loss_fn(params, x, y, is_training=True):
     logits = model.apply(params, x, is_training=is_training)
-    # return optax.softmax_cross_entropy(logits, y).mean()
-    labels = jax.nn.one_hot(y, 10)
-    softmax_xent = -jnp.sum(labels * jax.nn.log_softmax(logits))
-    return softmax_xent
+    loss = optax.softmax_cross_entropy(logits, y)
+    return loss[0]
+    # labels = jax.nn.one_hot(y, 10)
+    # softmax_xent = -jnp.sum(labels * jax.nn.log_softmax(logits))
+    # return softmax_xent
 
 
 @jax.jit
@@ -408,8 +409,10 @@ if __name__ == '__main__':
                 eps = privacy_accountant.get_epsilon(delta=args.delta)
 
                 # Logging
-                print('Epoch: {}, Batch: {}, Acc = {:.3f}, Eps = {:.3f}, Clip = {:.3f}, NM = {:.3f}, grad_norm = {:.3f}'.format(
-                    e, i, float(correct_preds / total_preds), eps, clip, noise_multiplier, float(mean_gradients_size)
+                print('Epoch: {}, Batch: {}, Acc = {:.3f}, Eps = {:.3f}, Clip = {:.3f}, '
+                      'NM = {:.3f}, grad_norm = {:.3f}, mean_loss = {:.3f}, std_loss = {:.3f}'.format(
+                    e, i, float(correct_preds / total_preds), eps, clip, noise_multiplier, float(mean_gradients_size),
+                    jnp.mean(loss), jnp.std(loss)
                 ))
                 Accuracy.append(correct_preds / total_preds)
                 Epsilon.append(eps)
@@ -418,7 +421,8 @@ if __name__ == '__main__':
                         e, i, float(correct_preds / total_preds), eps, avg_sparcity, clip, noise_multiplier,
                         float(mean_gradients_size), float(mean_gradients_size_clipped), float(grads_norm_noised),
                         avg_pre_q_25, avg_pre_q_50, avg_pre_q_75, avg_pre_mean, avg_pre_std,
-                        avg_post_q_25, avg_post_q_50, avg_post_q_75, avg_post_mean, avg_post_std, avg_pruned_max
+                        avg_post_q_25, avg_post_q_50, avg_post_q_75, avg_post_mean, avg_post_std, avg_pruned_max,
+                        jnp.mean(loss), jnp.std(loss)
                     ]
                     log_str = '{:.3f} | ' * (len(log_items) - 1) + '{:.3f}'
                     formatted_log = log_str.format(*log_items)
