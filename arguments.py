@@ -15,6 +15,9 @@ def get_arg_parser():
     train_group.add_argument('--result_path', type=str, default="./results/")
     train_group.add_argument('--data_path', type=str)
     train_group.add_argument('--test_every_n', type=int, default=5)
+    train_group.add_argument('--dataset', choices=["cifar10", "mnist"])
+    train_group.add_argument('--model', choices=["resnet9", "cnn_small", 'cnn_med'])
+    train_group.add_argument('--noise_scheduler', choices=["exp_decay", "exp_increase"])
 
     dp_group = parser.add_argument_group("dp")
     dp_group.add_argument('--clip', type=float, default=1.0)
@@ -24,12 +27,14 @@ def get_arg_parser():
 
     prune_group = parser.add_argument_group("prune")
     prune_group.add_argument('--prune', action='store_true')
-    prune_group.add_argument('--prune_after_n', type=int, default=10)
+    prune_group.add_argument('--prune_after_n', type=int, default=1)
     prune_group.add_argument('--num_train_per_prune', type=int, default=10)
     prune_group.add_argument('--prune_type', choices=["grouped", "local"], default="grouped")
-    prune_group.add_argument('--conv2d_prune_amount', type=float, default=0.4)
-    prune_group.add_argument('--linear_prune_amount', type=float, default=0.2)
+    prune_group.add_argument('--conv2d_prune_amount', type=float, default=0.1)
+    prune_group.add_argument('--linear_prune_amount', type=float, default=0.1)
     prune_group.add_argument('--restore_every_n', type=int, default=5)
-    prune_group.add_argument('--rescale_c', action='store_true')
+    prune_group.add_argument('--rescale_type_1', action='store_true')
+    prune_group.add_argument('--rescale_type_2', action='store_true')
+    prune_group.add_argument('--no_prune_after_n', type=int, default=3)
 
     return parser
