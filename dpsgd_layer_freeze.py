@@ -338,16 +338,16 @@ if __name__ == '__main__':
                 mean_tmp_gradients_size_5 = tmp_gradients_size_5 / (lot_size // args.batch_size)
 
                 # TMP:
-                if not args.debug:
-                    if i == (args.lot_size / args.batch_size) - 1:
-                        tmp_dict = {}
-                        for layer_name in trainable_params_gradients.keys():
-                            tmp_name = layer_name.split('/')[-1]
-                            if ('conv' in tmp_name) or ('linear' in tmp_name):
-                                tmp_dict[layer_name] = np.array(trainable_params_gradients[layer_name]['w'])
-                        tmp_out_name = os.path.join(result_path, "grads_{}_{}.pkl".format(e, i))
-                        with open(tmp_out_name, "wb") as tmp_output:
-                            pickle.dump(tmp_dict, tmp_output)
+                # if not args.debug:
+                #     if i == (args.lot_size / args.batch_size) - 1:
+                #         tmp_dict = {}
+                #         for layer_name in trainable_params_gradients.keys():
+                #             tmp_name = layer_name.split('/')[-1]
+                #             if ('conv' in tmp_name) or ('linear' in tmp_name):
+                #                 tmp_dict[layer_name] = np.array(trainable_params_gradients[layer_name]['w'])
+                #         tmp_out_name = os.path.join(result_path, "grads_{}_{}.pkl".format(e, i))
+                #         with open(tmp_out_name, "wb") as tmp_output:
+                #             pickle.dump(tmp_dict, tmp_output)
 
                 # Add noise
                 trainable_params_gradients, grads_norm_noised, grads_norm_noised_per_layer = noise_grads(
