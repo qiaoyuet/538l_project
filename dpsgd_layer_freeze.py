@@ -14,8 +14,8 @@ from opacus.accountants.rdp import RDPAccountant
 from arguments import get_arg_parser
 from model.fixup_resnet import ResNet9, ResNet101
 from model.cnn import CNNSmall, CNNMed, VGG16
-from prune.prune import L1Unstructured
-from haiku._src.data_structures import FlatMap
+# from prune.prune import L1Unstructured
+# from haiku._src.data_structures import FlatMap
 import pickle
 
 from util.dataloader import Normalize, AddChannelDim, Cast, NumpyLoader
@@ -231,7 +231,7 @@ if __name__ == '__main__':
         grads_norm_clipped_per_layer_sum = None
         mean_gradients_size_list = []
 
-        if args.prune and (e > 10):
+        if args.prune and (e > args.tmp_e1):
             # trainable_params, non_trainable_params = haiku.data_structures.partition(
             #     lambda m, n, p: (m != 'cnn_small/linear') & (m != 'cnn_small/conv2_d'), params)
             trainable_params, non_trainable_params = haiku.data_structures.partition(
@@ -239,9 +239,21 @@ if __name__ == '__main__':
             print("trainable:", list(trainable_params))
             print("non_trainable:", list(non_trainable_params))
 
-        if args.prune and (e > 20):
+        if args.prune and (e > args.tmp_e2):
             trainable_params, non_trainable_params = haiku.data_structures.partition(
-                lambda m, n, p: (m != 'cnn_med/conv2_d_1') & (m != 'cnn_small/conv2_d'), params)
+                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_small/conv2_d'), params)
+            print("trainable:", list(trainable_params))
+            print("non_trainable:", list(non_trainable_params))
+
+        if args.prune and (e > args.tmp_e3):
+            trainable_params, non_trainable_params = haiku.data_structures.partition(
+                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_small/conv2_d') and (m != 'cnn_med/conv2_d_2'), params)
+            print("trainable:", list(trainable_params))
+            print("non_trainable:", list(non_trainable_params))
+
+        if args.prune and (e > args.tmp_e4):
+            trainable_params, non_trainable_params = haiku.data_structures.partition(
+                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_small/conv2_d') and (m != 'cnn_med/conv2_d_2') and (m != 'cnn_med/conv2_d_3'), params)
             print("trainable:", list(trainable_params))
             print("non_trainable:", list(non_trainable_params))
 

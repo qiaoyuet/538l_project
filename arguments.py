@@ -37,5 +37,9 @@ def get_arg_parser():
     prune_group.add_argument('--rescale_type_1', action='store_true')
     prune_group.add_argument('--rescale_type_2', action='store_true')
     prune_group.add_argument('--no_prune_after_n', type=int, default=3)
+    prune_group.add_argument('--tmp_e1', type=int, default=1000)
+    prune_group.add_argument('--tmp_e2', type=int, default=1000)
+    prune_group.add_argument('--tmp_e3', type=int, default=1000)
+    prune_group.add_argument('--tmp_e4', type=int, default=1000)
 
     return parser
