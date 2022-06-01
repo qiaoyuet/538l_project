@@ -16,8 +16,9 @@ def get_arg_parser():
     train_group.add_argument('--data_path', type=str)
     train_group.add_argument('--test_every_n', type=int, default=5)
     train_group.add_argument('--dataset', choices=["cifar10", "mnist"])
-    train_group.add_argument('--model', choices=["resnet9", "cnn_small", 'cnn_med'])
-    train_group.add_argument('--noise_scheduler', choices=["exp_decay", "exp_increase"])
+    train_group.add_argument('--model', choices=["resnet9", "cnn_small", 'cnn_med', 'vgg16'])
+    train_group.add_argument('--noise_scheduler', choices=["exp_decay", "exp_increase", "exp_inc_dec"], default=None)
+    train_group.add_argument('--tmp_step', type=int, default=-1)
 
     dp_group = parser.add_argument_group("dp")
     dp_group.add_argument('--clip', type=float, default=1.0)

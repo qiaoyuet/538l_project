@@ -1,6 +1,7 @@
 import time
 import random
 import json
+import pickle
 import torch
 import torchvision
 import torchvision.transforms as transforms
@@ -184,7 +185,6 @@ if __name__ == '__main__':
 
     clip = args.clip
     noise_multiplier = args.noise_multiplier
-    lot_size = args.lot_size
 
     mean_gradients_size_after, mean_gradients_size_before = None, None
 
@@ -258,25 +258,37 @@ if __name__ == '__main__':
                 )
             gradients = grads
 
-            if (i + 1) % (lot_size // args.batch_size) == 0:
+            if (i + 1) % (args.lot_size // args.batch_size) == 0:
                 lot_idx_counter += 1
 
-                mean_gradients_size = gradients_size / (lot_size // args.batch_size)
+                mean_gradients_size = gradients_size / (args.lot_size // args.batch_size)
                 # mean_gradients_size_list.append(mean_gradients_size)
-                mean_gradients_size_clipped = gradients_size_clipped / (lot_size // args.batch_size)
+                mean_gradients_size_clipped = gradients_size_clipped / (args.lot_size // args.batch_size)
                 grads_norm_per_layer_sum = jax.tree_map(
-                    lambda x: x / (lot_size // args.batch_size), grads_norm_per_layer_sum)
+                    lambda x: x / (args.lot_size // args.batch_size), grads_norm_per_layer_sum)
                 grads_norm_clipped_per_layer_sum = jax.tree_map(
-                    lambda x: x / (lot_size // args.batch_size), grads_norm_clipped_per_layer_sum)
+                    lambda x: x / (args.lot_size // args.batch_size), grads_norm_clipped_per_layer_sum)
                 # grads_norm_per_layer_dict = get_per_layer_grad_norm(grads_norm_per_layer_sum)
                 # grads_norm_clipped_per_layer_dict = get_per_layer_grad_norm(grads_norm_clipped_per_layer_sum)
+
+                # TMP:
+                if not args.debug:
+                    if i == (args.lot_size / args.batch_size) - 1:
+                        tmp_dict = {}
+                        for layer_name in gradients.keys():
+                            tmp_name = layer_name.split('/')[-1]
+                            if ('conv' in tmp_name) or ('linear' in tmp_name):
+                                tmp_dict[layer_name] = np.array(gradients[layer_name]['w'])
+                        tmp_out_name = os.path.join(result_path, "grads_{}_{}.pkl".format(e, i))
+                        with open(tmp_out_name, "wb") as tmp_output:
+                            pickle.dump(tmp_dict, tmp_output)
 
                 # Add noise
                 gradients, grads_norm_noised, grads_norm_noised_per_layer = noise_grads(
                     gradients,
                     max_clipping_value=clip,
                     noise_multiplier=noise_multiplier,
-                    lot_size=lot_size,
+                    lot_size=args.lot_size,
                     seed=next(prng_seq),
                     prune_masks_tree=prune_masks_tree
                 )
@@ -285,40 +297,144 @@ if __name__ == '__main__':
                 params, opt_state = update(params, gradients, opt_state)
                 # params = update_prune(params, prune_masks_tree)
 
-                # # TMP: noise_schedulers
-                if args.noise_scheduler == 'exp_decay':
-                    noise_multiplier *= 0.9999
-                elif args.noise_scheduler == 'exp_increase':
-                    noise_multiplier *= 1.01
-                elif args.noise_scheduler == 'exp_inc_dec':
-                    if lot_idx_counter < 2000:
-                        noise_multiplier *= 1.0001
-                    else:
-                        noise_multiplier *= 0.9999
+                # pruning
+                # FIXME: lot_idx_counter or e
+                if args.prune and \
+                        (lot_idx_counter >= args.prune_after_n) and \
+                        ((lot_idx_counter - args.prune_after_n) % (args.num_train_per_prune + 1) == 0) and \
+                        (lot_idx_counter <= args.no_prune_after_n):
 
-                # TMP: steps
-                # if lot_idx_counter == args.tmp_step:
-                #     noise_multiplier -= 1
-                if lot_idx_counter == args.tmp_step:
-                    lot_size *= 2
+                    # Pruning
+                    print('Pruning step')
+                    prune_masks_tree = []
+                    prune_iter_counter += 1
+                    if (args.restore_every_n != -1) and (prune_iter_counter % args.restore_every_n == 0):
+                        prune_masks = {}
+                    pruned_params = []
+                    sparcities = []
+                    prunr_stats_list = []
+                    prune_method = L1Unstructured(conv_amount=args.conv2d_prune_amount,
+                                                  linear_amount=args.linear_prune_amount)
+                    for module_name in list(params.keys()):
+                        tmp_name = module_name.split('/')[-1]
+                        if ('conv' in tmp_name) or ('linear' in tmp_name):
+                            tmp_param = params[module_name]['w']
+                            if module_name not in prune_masks:
+                                default_mask = None
+                            else:
+                                default_mask = prune_masks[module_name]
+
+                            if 'conv' in tmp_name:
+                                prune_mask, sparcity, prune_stats = prune_method.compute_mask(
+                                    t=tmp_param, default_mask=default_mask, layer_type='conv'
+                                )
+                            elif 'linear' in tmp_name:
+                                prune_mask, sparcity, prune_stats = prune_method.compute_mask(
+                                    t=tmp_param, default_mask=default_mask, layer_type='linear'
+                                )
+                            else:
+                                raise NotImplementedError
+
+                            prunr_stats_list.append(prune_stats)
+
+                            if module_name not in prune_masks:
+                                tmp_mask = prune_mask
+                            else:
+                                tmp_mask = jnp.multiply(prune_masks[module_name], prune_mask)
+                            if 'b' in params[module_name].keys():
+                                tmp_param_bias = params[module_name]['b']
+                                tmp_prune_masks_tree = FlatMap(dict(w=tmp_mask,
+                                                                    b=jnp.ones_like(tmp_param_bias)))
+                            else:
+                                tmp_prune_masks_tree = FlatMap(dict(w=tmp_mask))
+                            tmp_mask_flat = np.array(tmp_mask).flatten()
+                            cur_sparcity = np.count_nonzero(tmp_mask_flat == 0) / len(tmp_mask_flat)
+                            sparcities.append(cur_sparcity)
+                            prune_masks[module_name] = tmp_mask
+                            apply_prune = prune_method.apply_mask(tmp_param, prune_masks[module_name])
+
+                            if 'b' in params[module_name].keys():
+                                pruned_param = FlatMap(dict(w=apply_prune, b=params[module_name]['b']))
+                            else:
+                                pruned_param = FlatMap(dict(w=apply_prune))
+                        elif 'b' in tmp_name:
+                            pruned_param = params[module_name]
+                            sparcity = 0
+                            tmp_prune_masks_tree = FlatMap(dict(b=jnp.ones_like(params[module_name]['b'])))
+                        elif 'scale' in tmp_name:
+                            pruned_param = params[module_name]
+                            sparcity = 0
+                            tmp_prune_masks_tree = FlatMap(dict(s=jnp.ones_like(params[module_name]['s'])))
+                        elif 'logits' in tmp_name:
+                            pruned_param = params[module_name]
+                            sparcity = 0
+                            tmp_prune_masks_tree = FlatMap(dict(w=jnp.ones_like(params[module_name]['w']),
+                                                                b=jnp.ones_like(params[module_name]['b'])))
+                        else:
+                            raise NotImplementedError
+                        pruned_params.append(pruned_param)
+                        prune_masks_tree.append(tmp_prune_masks_tree)
+                    params = update_prune(params, pruned_params)
+                    prune_masks_tree = update_prune(params, prune_masks_tree)
+                    avg_sparcity = np.mean(np.array(sparcities))
+                    prunr_stats_list_array = np.array([np.array(tmp_stats) for tmp_stats in prunr_stats_list])
+                    avg_pre_q_25, avg_pre_q_50, avg_pre_q_75, avg_pre_mean, avg_pre_std, \
+                    avg_post_q_25, avg_post_q_50, avg_post_q_75, avg_post_mean, avg_post_std, avg_pruned_max = \
+                        np.mean(prunr_stats_list_array, axis=0)
+
+                    if args.rescale_type_1 or args.rescale_type_2:
+                        # FIXME: protect priv for coef?
+                        tmp_batch = next(iter(train_loader))
+                        batch_x, batch_y = tmp_batch
+                        _, tmp_grads = get_loss_grads(params, batch_x, batch_y)
+
+                        tmp_grads_pruned = jax.tree_multimap(
+                            lambda x, y: x * jnp.repeat(jnp.expand_dims(y, axis=0), repeats=x.shape[0], axis=0),
+                            tmp_grads, prune_masks_tree
+                        )
+
+                        grads_norm_old = jnp.sqrt(jax.tree_util.tree_reduce(
+                            lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                            tmp_grads, 0
+                        ))
+
+                        grads_norm_new = jnp.sqrt(jax.tree_util.tree_reduce(
+                            lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                            tmp_grads_pruned, 0
+                        ))
+
+                        reduced_coef = grads_norm_new / grads_norm_old
+
+                        if args.rescale_type_1:
+                            clip *= float(jnp.mean(grads_norm_new / grads_norm_old))
+                        if args.rescale_type_2:
+                            noise_multiplier /= float(jnp.mean(grads_norm_new / grads_norm_old))
+                else:
+                    # print('Regular training step')
+                    # avg_sparcity = avg_sparcity
+                    avg_pre_q_25, avg_pre_q_50, avg_pre_q_75, avg_pre_mean, avg_pre_std, \
+                    avg_post_q_25, avg_post_q_50, avg_post_q_75, avg_post_mean, avg_post_std, avg_pruned_max = \
+                        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1
 
                 # Privacy Accountant
                 privacy_accountant.step(noise_multiplier=noise_multiplier,
-                                        sample_rate=lot_size / N_train)
+                                        sample_rate=args.lot_size / N_train)
                 eps = privacy_accountant.get_epsilon(delta=args.delta)
 
                 # Logging
                 print('Epoch: {}, Batch: {}, Acc = {:.3f}, Eps = {:.3f}, Clip = {:.3f}, '
-                      'NM = {:.3f}, grad_norm = {:.3f}, mean_loss = {:.3f}, std_loss = {:.3f}'.format(
+                      'NM = {:.3f}, grad_norm = {:.3f}, mean_loss = {:.3f}, std_loss = {:.3f}, avg sparcity = {:.3f}'.format(
                     e, i, float(correct_preds / total_preds), eps, clip, noise_multiplier, float(mean_gradients_size),
-                    jnp.mean(loss), jnp.std(loss)
+                    jnp.mean(loss), jnp.std(loss), avg_sparcity
                 ))
                 Accuracy.append(correct_preds / total_preds)
                 Epsilon.append(eps)
                 if not args.debug:
                     log_items = [
-                        e, i, float(correct_preds / total_preds), eps, avg_sparcity, clip, noise_multiplier, lot_size,
+                        e, i, float(correct_preds / total_preds), eps, avg_sparcity, clip, noise_multiplier,
                         float(mean_gradients_size), float(mean_gradients_size_clipped), float(grads_norm_noised),
+                        avg_pre_q_25, avg_pre_q_50, avg_pre_q_75, avg_pre_mean, avg_pre_std,
+                        avg_post_q_25, avg_post_q_50, avg_post_q_75, avg_post_mean, avg_post_std, avg_pruned_max,
                         jnp.mean(loss), jnp.std(loss)
                     ]
                     log_str = '{:.3f} | ' * (len(log_items) - 1) + '{:.3f}'
