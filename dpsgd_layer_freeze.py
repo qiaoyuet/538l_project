@@ -215,6 +215,10 @@ if __name__ == '__main__':
     print("trainable:", list(trainable_params))
     print("non_trainable:", list(non_trainable_params))
 
+    # TMP:
+    old_grad_norms_by_layer = []
+    cur_grad_norms_by_layer = []
+
     for e in range(args.epochs):
 
         trainable_params_gradients = None
@@ -227,33 +231,49 @@ if __name__ == '__main__':
         tmp_gradients_size_4 = 0
         tmp_gradients_size_5 = 0
         gradients_size_clipped = 0
+        gradients_size_max = 0
+        gradients_size_clipped_max = 0
         grads_norm_per_layer_sum = None
         grads_norm_clipped_per_layer_sum = None
         mean_gradients_size_list = []
 
         if args.prune and (e > args.tmp_e1):
+            # TMP
+            def flattened_traversal(fn):
+                """Returns function that is called with `(path, param)` instead of pytree."""
+
+                def mask(tree):
+                    flat = jax.tree_util.tree_flatten(tree)
+                    flat = flax.traverse_util.flatten_dict(tree)
+                    return flax.traverse_util.unflatten_dict(
+                        {k: fn(k, v) for k, v in flat.items()})
+
+                return mask
+
+
+
             # trainable_params, non_trainable_params = haiku.data_structures.partition(
             #     lambda m, n, p: (m != 'cnn_small/linear') & (m != 'cnn_small/conv2_d'), params)
             trainable_params, non_trainable_params = haiku.data_structures.partition(
-                lambda m, n, p: m != 'cnn_small/conv2_d', params)
+                lambda m, n, p: m != 'cnn_med/conv2_d', params)
             print("trainable:", list(trainable_params))
             print("non_trainable:", list(non_trainable_params))
 
         if args.prune and (e > args.tmp_e2):
             trainable_params, non_trainable_params = haiku.data_structures.partition(
-                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_small/conv2_d'), params)
+                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d'), params)
             print("trainable:", list(trainable_params))
             print("non_trainable:", list(non_trainable_params))
 
         if args.prune and (e > args.tmp_e3):
             trainable_params, non_trainable_params = haiku.data_structures.partition(
-                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_small/conv2_d') and (m != 'cnn_med/conv2_d_2'), params)
+                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d') and (m != 'cnn_med/conv2_d_2'), params)
             print("trainable:", list(trainable_params))
             print("non_trainable:", list(non_trainable_params))
 
         if args.prune and (e > args.tmp_e4):
             trainable_params, non_trainable_params = haiku.data_structures.partition(
-                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_small/conv2_d') and (m != 'cnn_med/conv2_d_2') and (m != 'cnn_med/conv2_d_3'), params)
+                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d') and (m != 'cnn_med/conv2_d_2') and (m != 'cnn_med/conv2_d_3'), params)
             print("trainable:", list(trainable_params))
             print("non_trainable:", list(non_trainable_params))
 
@@ -271,34 +291,36 @@ if __name__ == '__main__':
             loss, trainable_params_grads = get_loss_grads(trainable_params, non_trainable_params, batch_x, batch_y)
             # TMP
             _, all_params_grads = get_loss_grads(params, non_trainable_params, batch_x, batch_y)
+            tmp_grads_norm1 = jnp.sqrt(jax.tree_util.tree_reduce(
+                lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                all_params_grads['cnn_med/conv2_d'], 0
+            ))
 
-            # tmp_grads_norm1 = jnp.sqrt(jax.tree_util.tree_reduce(
-            #     lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
-            #     all_params_grads['cnn_med/conv2_d'], 0
-            # ))
-            #
-            # tmp_grads_norm2 = jnp.sqrt(jax.tree_util.tree_reduce(
-            #     lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
-            #     all_params_grads['cnn_med/conv2_d_1'], 0
-            # ))
-            #
-            # tmp_grads_norm3 = jnp.sqrt(jax.tree_util.tree_reduce(
-            #     lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
-            #     all_params_grads['cnn_med/conv2_d_2'], 0
-            # ))
-            #
-            # tmp_grads_norm4 = jnp.sqrt(jax.tree_util.tree_reduce(
-            #     lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
-            #     all_params_grads['cnn_med/conv2_d_3'], 0
-            # ))
-            #
-            # tmp_grads_norm5 = jnp.sqrt(jax.tree_util.tree_reduce(
-            #     lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
-            #     all_params_grads['cnn_med/conv2_d_4'], 0
-            # ))
-            tmp_grads_norm1, tmp_grads_norm2, tmp_grads_norm3, tmp_grads_norm4, tmp_grads_norm5 = 0,0,0,0,0
+            tmp_grads_norm2 = jnp.sqrt(jax.tree_util.tree_reduce(
+                lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                all_params_grads['cnn_med/conv2_d_1'], 0
+            ))
 
-            # print(jnp.mean(tmp_grads_norm1), jnp.mean(tmp_grads_norm2))
+            tmp_grads_norm3 = jnp.sqrt(jax.tree_util.tree_reduce(
+                lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                all_params_grads['cnn_med/conv2_d_2'], 0
+            ))
+
+            tmp_grads_norm4 = jnp.sqrt(jax.tree_util.tree_reduce(
+                lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                all_params_grads['cnn_med/conv2_d_3'], 0
+            ))
+
+            tmp_grads_norm5 = jnp.sqrt(jax.tree_util.tree_reduce(
+                lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                all_params_grads['cnn_med/conv2_d_4'], 0
+            ))
+
+            # # TMP
+            # cur_grad_norms_by_layer.extend([tmp_grads_norm1, tmp_grads_norm2, tmp_grads_norm3, tmp_grads_norm4, tmp_grads_norm5])
+            # if len(old_grad_norms_by_layer) !=0:
+            #     grad_norm_diff = np.array(cur_grad_norms_by_layer) - np.array(old_grad_norms_by_layer)
+            # old_grad_norms_by_layer = [tmp_grads_norm1, tmp_grads_norm2, tmp_grads_norm3, tmp_grads_norm4, tmp_grads_norm5]
 
             # Clip (& Accumulate) gradient
             trainable_params_grads, grads_norm, grads_norm_clipped, grads_norm_per_layer, grads_norm_clipped_per_layer, \
@@ -307,11 +329,12 @@ if __name__ == '__main__':
             # # TMP
             # _, grads_norm_orig, _, _, _, _, _, _, _ = \
             #     clip_grads(all_params_grads, max_clipping_value=clip, prune_masks_tree=[])
-
             # print(jnp.mean(grads_norm), jnp.mean(grads_norm_orig))
 
             gradients_size += jnp.mean(grads_norm)
             gradients_size_clipped += jnp.mean(grads_norm_clipped)
+            gradients_size_max += jnp.max(grads_norm)
+            gradients_size_clipped_max += jnp.max(grads_norm_clipped)
             tmp_gradients_size_1 += jnp.mean(tmp_grads_norm1)
             tmp_gradients_size_2 += jnp.mean(tmp_grads_norm2)
             tmp_gradients_size_3 += jnp.mean(tmp_grads_norm3)
@@ -331,6 +354,8 @@ if __name__ == '__main__':
                 lot_idx_counter += 1
                 mean_gradients_size = gradients_size / (lot_size // args.batch_size)
                 mean_gradients_size_clipped = gradients_size_clipped / (lot_size // args.batch_size)
+                max_gradients_size = gradients_size_max / (lot_size // args.batch_size)
+                max_gradients_size_clipped = gradients_size_clipped_max / (lot_size // args.batch_size)
                 mean_tmp_gradients_size_1 = tmp_gradients_size_1 / (lot_size // args.batch_size)
                 mean_tmp_gradients_size_2 = tmp_gradients_size_2 / (lot_size // args.batch_size)
                 mean_tmp_gradients_size_3 = tmp_gradients_size_3 / (lot_size // args.batch_size)
@@ -338,16 +363,16 @@ if __name__ == '__main__':
                 mean_tmp_gradients_size_5 = tmp_gradients_size_5 / (lot_size // args.batch_size)
 
                 # TMP:
-                # if not args.debug:
-                #     if i == (args.lot_size / args.batch_size) - 1:
-                #         tmp_dict = {}
-                #         for layer_name in trainable_params_gradients.keys():
-                #             tmp_name = layer_name.split('/')[-1]
-                #             if ('conv' in tmp_name) or ('linear' in tmp_name):
-                #                 tmp_dict[layer_name] = np.array(trainable_params_gradients[layer_name]['w'])
-                #         tmp_out_name = os.path.join(result_path, "grads_{}_{}.pkl".format(e, i))
-                #         with open(tmp_out_name, "wb") as tmp_output:
-                #             pickle.dump(tmp_dict, tmp_output)
+                if not args.debug:
+                    if i == (args.lot_size / args.batch_size) - 1:
+                        tmp_dict = {}
+                        for layer_name in trainable_params_gradients.keys():
+                            tmp_name = layer_name.split('/')[-1]
+                            if ('conv' in tmp_name) or ('linear' in tmp_name):
+                                tmp_dict[layer_name] = np.array(trainable_params_gradients[layer_name]['w'])
+                        tmp_out_name = os.path.join(result_path, "grads_{}_{}.pkl".format(e, i))
+                        with open(tmp_out_name, "wb") as tmp_output:
+                            pickle.dump(tmp_dict, tmp_output)
 
                 # Add noise
                 trainable_params_gradients, grads_norm_noised, grads_norm_noised_per_layer = noise_grads(
@@ -378,7 +403,9 @@ if __name__ == '__main__':
                 if not args.debug:
                     log_items = [
                         e, i, float(correct_preds / total_preds), eps, clip, noise_multiplier, lot_size,
-                        float(mean_gradients_size), float(mean_gradients_size_clipped), float(grads_norm_noised),
+                        float(mean_gradients_size), float(mean_gradients_size_clipped),
+                        float(max_gradients_size), float(max_gradients_size_clipped),
+                        float(grads_norm_noised),
                         jnp.mean(loss), jnp.std(loss),
                         float(mean_tmp_gradients_size_1), float(mean_tmp_gradients_size_2),
                         float(mean_tmp_gradients_size_3), float(mean_tmp_gradients_size_4),
@@ -396,6 +423,8 @@ if __name__ == '__main__':
                 total_preds = 0
                 gradients_size = 0
                 gradients_size_clipped = 0
+                gradients_size_max = 0
+                gradients_size_clipped_max = 0
                 grads_norm_per_layer_sum = None
                 grads_norm_clipped_per_layer_sum = None
                 tmp_gradients_size_1 = 0
