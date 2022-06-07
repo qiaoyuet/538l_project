@@ -238,20 +238,6 @@ if __name__ == '__main__':
         mean_gradients_size_list = []
 
         if args.prune and (e > args.tmp_e1):
-            # TMP
-            def flattened_traversal(fn):
-                """Returns function that is called with `(path, param)` instead of pytree."""
-
-                def mask(tree):
-                    flat = jax.tree_util.tree_flatten(tree)
-                    flat = flax.traverse_util.flatten_dict(tree)
-                    return flax.traverse_util.unflatten_dict(
-                        {k: fn(k, v) for k, v in flat.items()})
-
-                return mask
-
-
-
             # trainable_params, non_trainable_params = haiku.data_structures.partition(
             #     lambda m, n, p: (m != 'cnn_small/linear') & (m != 'cnn_small/conv2_d'), params)
             trainable_params, non_trainable_params = haiku.data_structures.partition(
@@ -290,31 +276,46 @@ if __name__ == '__main__':
             # Compute gradient (forward + backward)
             loss, trainable_params_grads = get_loss_grads(trainable_params, non_trainable_params, batch_x, batch_y)
             # TMP
-            _, all_params_grads = get_loss_grads(params, non_trainable_params, batch_x, batch_y)
-            tmp_grads_norm1 = jnp.sqrt(jax.tree_util.tree_reduce(
-                lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
-                all_params_grads['cnn_med/conv2_d'], 0
-            ))
+            # _, all_params_grads = get_loss_grads(params, non_trainable_params, batch_x, batch_y)
+            if 'cnn_med/conv2_d' in trainable_params_grads.keys():
+                tmp_grads_norm1 = jnp.sqrt(jax.tree_util.tree_reduce(
+                    lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                    trainable_params_grads['cnn_med/conv2_d'], 0
+                ))
+            else:
+                tmp_grads_norm1 = 0
 
-            tmp_grads_norm2 = jnp.sqrt(jax.tree_util.tree_reduce(
-                lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
-                all_params_grads['cnn_med/conv2_d_1'], 0
-            ))
+            if 'cnn_med/conv2_d_1' in trainable_params_grads.keys():
+                tmp_grads_norm2 = jnp.sqrt(jax.tree_util.tree_reduce(
+                    lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                    trainable_params_grads['cnn_med/conv2_d_1'], 0
+                ))
+            else:
+                tmp_grads_norm2 = 0
 
-            tmp_grads_norm3 = jnp.sqrt(jax.tree_util.tree_reduce(
-                lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
-                all_params_grads['cnn_med/conv2_d_2'], 0
-            ))
+            if 'cnn_med/conv2_d_2' in trainable_params_grads.keys():
+                tmp_grads_norm3 = jnp.sqrt(jax.tree_util.tree_reduce(
+                    lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                    trainable_params_grads['cnn_med/conv2_d_2'], 0
+                ))
+            else:
+                tmp_grads_norm3 = 0
 
-            tmp_grads_norm4 = jnp.sqrt(jax.tree_util.tree_reduce(
-                lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
-                all_params_grads['cnn_med/conv2_d_3'], 0
-            ))
+            if 'cnn_med/conv2_d_3' in trainable_params_grads.keys():
+                tmp_grads_norm4 = jnp.sqrt(jax.tree_util.tree_reduce(
+                    lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                    trainable_params_grads['cnn_med/conv2_d_3'], 0
+                ))
+            else:
+                tmp_grads_norm4 = 0
 
-            tmp_grads_norm5 = jnp.sqrt(jax.tree_util.tree_reduce(
-                lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
-                all_params_grads['cnn_med/conv2_d_4'], 0
-            ))
+            if 'cnn_med/conv2_d_4' in trainable_params_grads.keys():
+                tmp_grads_norm5 = jnp.sqrt(jax.tree_util.tree_reduce(
+                    lambda agg, x: agg + jnp.sum(jnp.reshape(jnp.square(x), (x.shape[0], -1)), axis=-1),
+                    trainable_params_grads['cnn_med/conv2_d_4'], 0
+                ))
+            else:
+                tmp_grads_norm5 = 0
 
             # # TMP
             # cur_grad_norms_by_layer.extend([tmp_grads_norm1, tmp_grads_norm2, tmp_grads_norm3, tmp_grads_norm4, tmp_grads_norm5])
