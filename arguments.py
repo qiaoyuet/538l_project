@@ -41,5 +41,6 @@ def get_arg_parser():
     prune_group.add_argument('--tmp_e2', type=int, default=1000)
     prune_group.add_argument('--tmp_e3', type=int, default=1000)
     prune_group.add_argument('--tmp_e4', type=int, default=1000)
+    prune_group.add_argument('--tmp_e5', type=int, default=1000)
 
     return parser

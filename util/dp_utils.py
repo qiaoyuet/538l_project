@@ -44,13 +44,15 @@ def noise_grads(grads, max_clipping_value, noise_multiplier, lot_size, seed, pru
     grads_flat, grads_treedef = jax.tree_flatten(grads)
     (*rngs,) = jax.random.split(seed, len(grads_flat))
     noised = []
-    # noise_z = []
+    noise_z = []
     for g, r in zip(grads_flat, rngs):
         z = jax.random.normal(r, g.shape, g.dtype)
         noised.append(g + (max_clipping_value * noise_multiplier) * z)
-        # noise_z.append(z)
+        noise_z.append(z)
     noise_grads = jax.tree_unflatten(grads_treedef, noised)
     noise_grads = jax.tree_util.tree_map(lambda x: x / lot_size, noise_grads)
+    noise_z_tree = jax.tree_unflatten(grads_treedef, noise_z)
+    avg_noise = jax.tree_util.tree_map(lambda x: x / lot_size, noise_z_tree)
 
     if prune_masks_tree != []:
         noise_grads = jax.tree_multimap(lambda x, y: x * y, noise_grads, prune_masks_tree)
@@ -62,7 +64,7 @@ def noise_grads(grads, max_clipping_value, noise_multiplier, lot_size, seed, pru
     grads_norm_noised_per_layer = jax.tree_map(
         lambda x: jnp.sqrt(jnp.sum(jnp.reshape(jnp.square(x), (1, -1)), axis=-1)), noise_grads)
 
-    return noise_grads, grads_norm_noised, grads_norm_noised_per_layer
+    return noise_grads, grads_norm_noised, grads_norm_noised_per_layer, avg_noise
 
 
 @jax.jit
