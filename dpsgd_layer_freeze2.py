@@ -67,20 +67,20 @@ def loss_fn(trainable_params, non_trainable_params, x, y, is_training=True):
     return softmax_xent
 
 
-# @jax.jit
-# def update(params, grads, opt_state):
-#     updates, opt_state = optimizer.update(grads, opt_state)
-#     new_params = optax.apply_updates(params, updates)
-#     return new_params, opt_state
-
-def sgd_step(params, grads, *, lr):
-    return jax.tree_map(lambda p, g: p - g * lr, params, grads)
-
-
 @jax.jit
-def update(trainable_params, trainable_params_grads):
-    trainable_params = sgd_step(trainable_params, trainable_params_grads, lr=args.lr)
-    return trainable_params
+def update(params, grads, opt_state):
+    updates, opt_state = optimizer.update(grads, opt_state)
+    new_params = optax.apply_updates(params, updates)
+    return new_params, opt_state
+
+# def sgd_step(params, grads, *, lr):
+#     return jax.tree_map(lambda p, g: p - g * lr, params, grads)
+#
+#
+# @jax.jit
+# def update(trainable_params, trainable_params_grads):
+#     trainable_params = sgd_step(trainable_params, trainable_params_grads, lr=args.lr)
+#     return trainable_params
 
 
 @jax.jit
@@ -216,8 +216,8 @@ if __name__ == '__main__':
     non_trainable_params = []
     # trainable_params, non_trainable_params = haiku.data_structures.partition(
     #     lambda m, n, p: (m != 'cnn_small/linear') & (m != 'cnn_small/conv2_d'), params)
-    print("trainable:", list(trainable_params))
-    print("non_trainable:", list(non_trainable_params))
+    # print("trainable:", list(trainable_params))
+    # print("non_trainable:", list(non_trainable_params))
 
     for e in range(args.epochs):
 
@@ -237,65 +237,6 @@ if __name__ == '__main__':
         grads_norm_clipped_per_layer_sum = None
         mean_gradients_size_list = []
         grad_norms_list = []
-
-        # Layer freeze
-        params = haiku.data_structures.merge(trainable_params, non_trainable_params)
-
-        if args.prune and (e > args.tmp_e1):
-            # trainable_params, non_trainable_params = haiku.data_structures.partition(
-            #     lambda m, n, p: (m != 'cnn_small/linear') & (m != 'cnn_small/conv2_d'), params)
-            trainable_params, non_trainable_params = haiku.data_structures.partition(
-                lambda m, n, p: m != 'cnn_med/conv2_d', params)
-            print("trainable:", list(trainable_params))
-            print("non_trainable:", list(non_trainable_params))
-        elif args.prune and (e > args.tmp_e2):
-            trainable_params, non_trainable_params = haiku.data_structures.partition(
-                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d'), params)
-            print("trainable:", list(trainable_params))
-            print("non_trainable:", list(non_trainable_params))
-        elif args.prune and (e > args.tmp_e3):
-            trainable_params, non_trainable_params = haiku.data_structures.partition(
-                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d') and (m != 'cnn_med/conv2_d_2'),
-                params)
-            print("trainable:", list(trainable_params))
-            print("non_trainable:", list(non_trainable_params))
-        elif args.prune and (e > args.tmp_e4):
-            trainable_params, non_trainable_params = haiku.data_structures.partition(
-                lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d') and (
-                        m != 'cnn_med/conv2_d_2') and (m != 'cnn_med/conv2_d_3'), params)
-            print("trainable:", list(trainable_params))
-            print("non_trainable:", list(non_trainable_params))
-        else:
-            raise NotImplementedError
-
-        # # Param update
-        # if args.prune and (e > args.tmp_e1):
-        #     trainable_params, non_trainable_params = haiku.data_structures.partition(
-        #         lambda m, n, p: (m != 'cnn_med/conv2_d') and (m != 'cnn_med/conv2_d_4') and
-        #                         (m != 'cnn_med/conv2_d_2') and (m != 'cnn_med/conv2_d_3'), params)
-        #     print("trainable:", list(trainable_params))
-        #     print("non_trainable:", list(non_trainable_params))
-        #
-        # if args.prune and (e > args.tmp_e2):
-        #     trainable_params, non_trainable_params = haiku.data_structures.partition(
-        #         lambda m, n, p: (m != 'cnn_med/conv2_d') and (m != 'cnn_med/conv2_d_4') and
-        #                         (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d_3'), params)
-        #     print("trainable:", list(trainable_params))
-        #     print("non_trainable:", list(non_trainable_params))
-        #
-        # if args.prune and (e > args.tmp_e3):
-        #     trainable_params, non_trainable_params = haiku.data_structures.partition(
-        #         lambda m, n, p: (m != 'cnn_med/conv2_d') and (m != 'cnn_med/conv2_d_2') and
-        #                         (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d_4'), params)
-        #     print("trainable:", list(trainable_params))
-        #     print("non_trainable:", list(non_trainable_params))
-        #
-        # if args.prune and (e > args.tmp_e4):
-        #     trainable_params, non_trainable_params = haiku.data_structures.partition(
-        #         lambda m, n, p: (m != 'cnn_med/conv2_d') and (m != 'cnn_med/conv2_d_2') and
-        #                         (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d_3'), params)
-        #     print("trainable:", list(trainable_params))
-        #     print("non_trainable:", list(non_trainable_params))
 
         for i, batch in enumerate(train_loader):
             # Processing data format for jax
@@ -441,12 +382,42 @@ if __name__ == '__main__':
 
                 # Descent (update)
                 # params = haiku.data_structures.merge(trainable_params, non_trainable_params)
-                # non_trainable_gradients = jax.tree_map(jnp.zeros_like, non_trainable_params)  # dummy gradients
-                # gradients = haiku.data_structures.merge(trainable_params_gradients, non_trainable_gradients)
+                non_trainable_gradients = jax.tree_map(jnp.zeros_like, non_trainable_params)  # dummy gradients
+                gradients = haiku.data_structures.merge(trainable_params_gradients, non_trainable_gradients)
                 # params = update(params, gradients)
-                # params, opt_state = update(params, gradients, opt_state)
-                trainable_params = update(trainable_params, trainable_params_gradients)  # working version
+                params, opt_state = update(params, gradients, opt_state)
+                # trainable_params = update(trainable_params, trainable_params_gradients)  # working version
                 # trainable_params, opt_state = update(trainable_params, trainable_params_gradients, opt_state)
+
+                # Layer freeze
+                if args.prune and (e > args.tmp_e1):
+                    # trainable_params, non_trainable_params = haiku.data_structures.partition(
+                    #     lambda m, n, p: (m != 'cnn_small/linear') & (m != 'cnn_small/conv2_d'), params)
+                    trainable_params, non_trainable_params = haiku.data_structures.partition(
+                        lambda m, n, p: m != 'cnn_med/conv2_d', params)
+                    # print("trainable:", list(trainable_params))
+                    # print("non_trainable:", list(non_trainable_params))
+                elif args.prune and (e > args.tmp_e2):
+                    trainable_params, non_trainable_params = haiku.data_structures.partition(
+                        lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d'), params)
+                    # print("trainable:", list(trainable_params))
+                    # print("non_trainable:", list(non_trainable_params))
+                elif args.prune and (e > args.tmp_e3):
+                    trainable_params, non_trainable_params = haiku.data_structures.partition(
+                        lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d') and (
+                                m != 'cnn_med/conv2_d_2'),
+                        params)
+                    # print("trainable:", list(trainable_params))
+                    # print("non_trainable:", list(non_trainable_params))
+                elif args.prune and (e > args.tmp_e4):
+                    trainable_params, non_trainable_params = haiku.data_structures.partition(
+                        lambda m, n, p: (m != 'cnn_med/conv2_d_1') and (m != 'cnn_med/conv2_d') and (
+                                m != 'cnn_med/conv2_d_2') and (m != 'cnn_med/conv2_d_3'), params)
+                    # print("trainable:", list(trainable_params))
+                    # print("non_trainable:", list(non_trainable_params))
+                else:
+                    trainable_params, non_trainable_params = haiku.data_structures.partition(
+                        lambda m, n, p: (m != ''), params)
 
                 # Privacy Accountant
                 privacy_accountant.step(noise_multiplier=noise_multiplier,
